@@ -236,7 +236,7 @@
                 Your browser does not support the audio element.
             </audio>
         </div>
-        <a href="{% url 'play_audio' audios=audios %}" download="{{ audios }}" class="download-btn">
+        <a href="{% url 'play_audio' audios=audios %}?download=1" download="{{ audios }}" class="download-btn">
             📥 DOWNLOAD AUDIO FILE
         </a>
     </div>

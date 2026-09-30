@@ -2,6 +2,7 @@ import io
 import sys
 import os
 import uuid
+from django.core.wsgi import get_wsgi_application
 from django.conf import settings
 from django.core.management import execute_from_command_line
 from django.http import JsonResponse, FileResponse
@@ -9,6 +10,8 @@ from django.shortcuts import render
 from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 from gtts import gTTS
+import threading
+import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Forces all file generation to land inside the specific /audios subdirectory
@@ -28,14 +31,15 @@ SUPPORTED_LANGUAGES = {
 # 1. RUNTIME CONFIGURATION INITIALIZATION
 if not settings.configured:
     settings.configure(
-        DEBUG=True,
-        SECRET_KEY="standalone-tts-secret-auth-stringkey",
-        ROOT_URLCONF=__name__,  
+        DEBUG=os.environ.get("DEBUG", "False") == "True",
+        SECRET_KEY=os.environ.get("SECRET_KEY", "dev-only-key"),
+        ALLOWED_HOSTS=["*"],
+        ROOT_URLCONF=__name__,
         BASE_DIR=BASE_DIR,
         TEMPLATES=[
             {
                 "BACKEND": "django.template.backends.django.DjangoTemplates",
-                "DIRS": [BASE_DIR],  
+                "DIRS": [BASE_DIR],
                 "APP_DIRS": False,
             }
         ],
@@ -76,17 +80,60 @@ def convert_speech(request):
         "error": error, 
         "languages": SUPPORTED_LANGUAGES
     })
-
 def play_audio(request, audios):
     safe_filename = os.path.basename(audios)
-    # File streaming resolved from inside the audios subdirectory
     file_path = os.path.join(AUDIO_DIR, safe_filename)
-    
+
     if os.path.exists(file_path):
+        ttl = DOWNLOAD_TTL if request.GET.get("download") else PLAY_TTL
+        schedule_delete(safe_filename, ttl)
         return FileResponse(open(file_path, "rb"), content_type="audio/mpeg")
-    
+
     return JsonResponse({"error": "File not found"}, status=404)
 
+
+
+PLAY_TTL = 5 * 60        # delete 5 min after first play
+DOWNLOAD_TTL = 3 * 60    # delete 3 min after download
+UNPLAYED_TTL = 15 * 60   # delete never-opened files after 15 min
+
+
+def schedule_delete(filename, ttl):
+    marker = os.path.join(AUDIO_DIR, filename + ".del")
+    deadline = time.time() + ttl
+    try:
+        with open(marker) as f:
+            deadline = min(deadline, float(f.read()))  # keep the earliest deadline
+    except (OSError, ValueError):
+        pass
+    with open(marker, "w") as f:
+        f.write(str(deadline))
+
+
+def cleanup_loop():
+    while True:
+        now = time.time()
+        for name in os.listdir(AUDIO_DIR):
+            if not name.endswith(".mp3"):
+                continue
+            path = os.path.join(AUDIO_DIR, name)
+            marker = path + ".del"
+            try:
+                if os.path.exists(marker):
+                    with open(marker) as f:
+                        expired = now >= float(f.read())
+                else:
+                    expired = now - os.path.getmtime(path) > UNPLAYED_TTL
+                if expired:
+                    os.remove(path)
+                    if os.path.exists(marker):
+                        os.remove(marker)
+            except (OSError, ValueError):
+                pass
+        time.sleep(30)
+
+
+threading.Thread(target=cleanup_loop, daemon=True).start()
 # 3. INTERNAL ROUTER MAPPINGS
 urlpatterns = [
     path("", convert_speech, name="convert_speech"),
@@ -94,7 +141,9 @@ urlpatterns = [
 ]
 
 # 4. ENVIRONMENT RUNNER CONSOLE
+application = get_wsgi_application()
+
 if __name__ == "__main__":
     if len(sys.argv) == 1:
-        sys.argv.extend(["runserver", "127.0.0.1:8000"]) 
+        sys.argv.extend(["runserver", "127.0.0.1:8000"])
     execute_from_command_line(sys.argv)
