@@ -2,10 +2,6 @@
 
 A minimalist standalone application that streams synthetic vocal voice-overs from written text.
 
-
-# Note :
-* **The audo file which are being converted are saved locally.**
-
 ## ⚙️ Features
 * **Subdirectory Control**: Generates text audio fragments explicitly inside an isolated `audios/` folder.
 * **Modern Design**: Clean CSS-animated background canvas with responsive glass layout controls.
